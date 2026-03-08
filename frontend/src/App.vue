@@ -1,329 +1,382 @@
 <script setup lang="ts">
-import { ref, onUnmounted, reactive, watch } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import axios from 'axios'
+import { ElMessage } from 'element-plus'
+import { useRuleStore } from './store/ruleStore'
+import { storeToRefs } from 'pinia'
 
-const taskId = ref('')
-const filename = ref('')
-const uploadStatus = ref<'idle' | 'uploading' | 'processing' | 'done' | 'error'>('idle')
-const progress = ref(0)
-const statusMessage = ref('')
-const report = ref<any>(null)
-const chapters = ref<any[]>([])
-const originalSnippet = ref('')
-const cleanedSnippet = ref('')
-let eventSource: EventSource | null = null
+// API base URL
+const API_BASE = 'http://localhost:8000'
 
-// RuleConfig reactive state
-const config = reactive({
-  encoding: { detect: true, manual_encoding: null },
-  base_cleaning: { remove_html: false, remove_control_chars: true, manual_blacklists: [] as string[] },
-  formatting: { fullwidth_halfwidth: 'none', paragraph_indent: false, empty_line_threshold: 2, normalize_line_breaks: true },
-  chapter: { built_in_patterns: true, custom_regex: '', renumber: false },
-  stitching: { enable: false }
-})
+// Pinia Store
+const store = useRuleStore()
+const { autoOptions, manualOptions, manualBlacklist, chapterConfig } = storeToRefs(store)
 
-const cleanupSSE = () => {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
+// local states
+const task_id = ref('')
+const fileUploaded = ref(false)
+const fileName = ref('')
+const previewLines = ref<string[]>([])
+const logEntries = ref<{ time: string, level: string, message: string }[]>([
+  { time: new Date().toLocaleTimeString(), level: 'INFO', message: '系统启动成功' }
+])
+const logVisible = ref(false)
+const isUploading = ref(false)
+const processingProgress = ref(0)
+const isProcessing = ref(false)
+const detectedChapters = ref<any[]>([])
+const isDeducing = ref(false)
+
+let sseSource: EventSource | null = null
+
+const addLog = (message: string, level = 'INFO') => {
+  logEntries.value.push({
+    time: new Date().toLocaleTimeString(),
+    level,
+    message
+  })
+}
+
+// Manual Filter Logic
+const manualInput = ref('')
+const parsedChars = ref<any[]>([])
+
+const parseManualInput = () => {
+  const chars = Array.from(manualInput.value.slice(0, 200))
+  const uniqueChars = [...new Set(chars)]
+  parsedChars.value = uniqueChars.map(c => {
+    const code = c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')
+    const isInvisible = /[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]/.test(c) || c.trim() === ''
+    return { char: c, code: `U+${code}`, isInvisible }
+  })
+}
+
+const toggleBlacklist = (char: string) => {
+  if (manualBlacklist.value.has(char)) {
+    manualBlacklist.value.delete(char)
+  } else {
+    manualBlacklist.value.add(char)
   }
 }
 
-onUnmounted(() => {
-  cleanupSSE()
-})
-
-// Debounced preview trigger
-let previewTimeout: any = null
-watch(config, () => {
-  if (!taskId.value) return
-  if (previewTimeout) clearTimeout(previewTimeout)
-  previewTimeout = setTimeout(fetchPreview, 500)
-}, { deep: true })
-
-const fetchPreview = async () => {
-  if (!taskId.value) return
+// Chapter Logic
+const refreshChapterPreview = async () => {
+  if (!task_id.value) return
   try {
-    const res = await axios.post(`http://127.0.0.1:8000/api/preview/${taskId.value}`, config)
-    originalSnippet.value = res.data.original
-    cleanedSnippet.value = res.data.cleaned
-    chapters.value = res.data.chapters
+    const response = await axios.post(`${API_BASE}/api/chapters/preview/${task_id.value}`, {
+      pattern: chapterConfig.value.regex || null,
+      max_length: 35
+    })
+    detectedChapters.value = response.data.chapters
   } catch (e) {
-    console.error('Preview failed:', e)
+    console.error('Failed to preview chapters', e)
   }
 }
 
-const handleFileUpload = async (event: Event) => {
-  const target = event.target as HTMLInputElement
-  if (!target.files || target.files.length === 0) return
-  
-  const file = target.files[0]
-  filename.value = file.name
-  uploadStatus.value = 'uploading'
-  progress.value = 0
-  statusMessage.value = '正在上传文件...'
-  report.value = null
-  originalSnippet.value = ''
-  cleanedSnippet.value = ''
+const handleDeduce = async () => {
+  if (!chapterConfig.value.sample) return
+  isDeducing.value = true
+  try {
+    const response = await axios.post(`${API_BASE}/api/chapters/deduce`, {
+      samples: [chapterConfig.value.sample]
+    })
+    chapterConfig.value.regex = response.data.regex
+    await refreshChapterPreview()
+    ElMessage.success('正则已自动推导')
+  } catch (e) {
+    ElMessage.error('推导失败')
+  } finally {
+    isDeducing.value = false
+  }
+}
 
+// File Lifecycle
+const handleUpload = async (options: any) => {
+  const { file } = options
+  if (!file.name.endsWith('.txt')) {
+    ElMessage.error('只允许上传 .txt 文件')
+    return
+  }
+
+  isUploading.value = true
   const formData = new FormData()
   formData.append('file', file)
 
   try {
-    const response = await axios.post('http://127.0.0.1:8000/api/upload', formData, {
-      onUploadProgress: (progressEvent) => {
-        if (progressEvent.total) {
-          progress.value = Math.round((progressEvent.loaded * 100) / progressEvent.total)
-        }
+    const response = await axios.post(`${API_BASE}/api/upload`, formData)
+    const data = response.data
+    
+    task_id.value = data.task_id
+    fileName.value = data.file_name
+    previewLines.value = data.preview
+    fileUploaded.value = true
+    
+    addLog(`文件 ${data.file_name} 上传成功`)
+    addLog(`已将 ${data.encoding} 编码改成 utf-8 编码`)
+    if (data.has_bom) addLog('已去除 BOM')
+    addLog('预览区已刷新')
+    
+  } catch (error: any) {
+    addLog(`上传失败: ${error.response?.data?.detail || error.message}`, 'ERROR')
+    ElMessage.error('上传失败')
+  } finally {
+    isUploading.value = false
+  }
+}
+
+const handleProcess = async () => {
+  if (!task_id.value) return
+
+  addLog('开始处理文件...')
+  isProcessing.value = true
+  processingProgress.value = 0
+  
+  // Start SSE for progress
+  sseSource = new EventSource(`${API_BASE}/api/stream-progress/${task_id.value}`)
+  sseSource.onmessage = (event) => {
+    processingProgress.value = parseInt(event.data)
+    if (processingProgress.value >= 100) {
+      sseSource?.close()
+    }
+  }
+
+  try {
+    const response = await axios.post(`${API_BASE}/api/process/${task_id.value}`, {
+      options: {
+        ...autoOptions.value,
+        ...manualOptions.value,
+        manual_blacklist: Array.from(manualBlacklist.value),
+        chapter_pattern: chapterConfig.value.regex || null,
+        chapter_reorder: chapterConfig.value.reorder
       }
     })
-    taskId.value = response.data.task_id
-    uploadStatus.value = 'idle'
-    statusMessage.value = '上传成功，请配置规则或开始清洗'
-    fetchPreview()
-  } catch (error) {
-    uploadStatus.value = 'error'
-    statusMessage.value = '上传失败'
+    
+    const data = response.data
+    previewLines.value = data.preview
+    detectedChapters.value = data.chapters
+    data.logs.forEach((msg: string) => addLog(msg))
+    addLog('预览区已刷新为处理后的文件')
+    ElMessage.success('处理完成')
+    
+  } catch (error: any) {
+    addLog(`处理失败: ${error.response?.data?.detail || error.message}`, 'ERROR')
+    ElMessage.error('处理失败')
+  } finally {
+    isProcessing.value = false
+    if (sseSource) sseSource.close()
   }
 }
 
-const startProcessing = async () => {
-  if (!taskId.value) return
-  uploadStatus.value = 'processing'
-  progress.value = 0
+const handleSave = async () => {
+  if (!task_id.value) return
   try {
-    await axios.post(`http://127.0.0.1:8000/api/process/${taskId.value}`, config)
-    startProgressStream(taskId.value)
-  } catch (error) {
-    uploadStatus.value = 'error'
-  }
-}
-
-const startProgressStream = (id: string) => {
-  cleanupSSE()
-  eventSource = new EventSource(`http://127.0.0.1:8000/api/stream-progress/${id}`)
-  eventSource.onmessage = async (event) => {
-    const data = JSON.parse(event.data)
-    progress.value = data.progress
-    if (data.status === 'done') {
-      uploadStatus.value = 'done'
-      progress.value = 100
-      cleanupSSE()
-      const reportRes = await axios.get(`http://127.0.0.1:8000/api/report/${taskId.value}`)
-      report.value = reportRes.data
+    const response = await axios.get(`${API_BASE}/api/download/${task_id.value}`, { responseType: 'blob' })
+    const url = window.URL.createObjectURL(new Blob([response.data]))
+    const link = document.createElement('a')
+    link.href = url
+    const contentDisposition = response.headers['content-disposition']
+    let downloadName = `${fileName.value.replace('.txt', '-已处理.txt')}`
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename\*=UTF-8''(.+)/)
+      if (match) downloadName = decodeURIComponent(match[1])
     }
+    link.setAttribute('download', downloadName)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    addLog(`已保存：${downloadName}`)
+    ElMessage.success(`文件已成功保存: ${downloadName}`)
+  } catch (error: any) {
+    addLog(`保存失败: ${error.message}`, 'ERROR')
+    ElMessage.error('保存失败')
   }
 }
 
-const downloadFile = () => {
-  window.open(`http://127.0.0.1:8000/api/download/${taskId.value}`, '_blank')
-}
-
-const exportConfig = () => {
-  const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = '27txt_config.json'
-  a.click()
-}
-
-const importConfig = (event: Event) => {
-  const file = (event.target as HTMLInputElement).files?.[0]
-  if (!file) return
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    try {
-      const imported = JSON.parse(e.target?.result as string)
-      Object.assign(config, imported)
-    } catch (err) {
-      alert('无效的配置文件')
-    }
-  }
-  reader.readAsText(file)
-}
+onUnmounted(() => {
+  if (sseSource) sseSource.close()
+})
 </script>
 
 <template>
-  <div class="h-screen w-screen flex flex-row overflow-hidden text-slate-900 bg-slate-50 font-sans">
-    <main class="w-2/3 flex flex-col border-r border-slate-200 overflow-y-auto bg-white">
-      <header class="p-4 border-b border-slate-200 flex justify-between items-center sticky top-0 bg-white/80 backdrop-blur-md z-10">
-        <div class="flex items-center space-x-3">
-           <div class="w-8 h-8 bg-blue-600 rounded flex items-center justify-center text-white font-bold">27</div>
-           <h1 class="text-xl font-bold tracking-tight text-slate-800">27txt 文本格式化工具</h1>
-        </div>
-        <div class="space-x-2">
-          <input type="file" id="import-config" class="hidden" @change="importConfig" accept=".json">
-          <button @click="$refs.configInput.click()" class="px-3 py-1.5 text-sm bg-slate-100 text-slate-700 rounded-md hover:bg-slate-200">导入配置</button>
-          <input type="file" ref="configInput" class="hidden" @change="importConfig" accept=".json">
-          <button @click="exportConfig" class="px-3 py-1.5 text-sm bg-slate-100 text-slate-700 rounded-md hover:bg-slate-200">导出配置</button>
-        </div>
-      </header>
+  <div class="h-screen w-screen bg-gray-50 text-gray-800 flex flex-col font-sans overflow-hidden">
+    <!-- Header -->
+    <header class="h-14 bg-white border-b border-gray-200 flex items-center px-6 shadow-sm shrink-0">
+      <h1 class="text-xl font-bold text-blue-600">27 TXT Formatter - 文本清理工具</h1>
+    </header>
 
-      <div class="flex-1 p-6 space-y-6 max-w-5xl mx-auto w-full">
-        <!-- Step 1: Upload -->
-        <section class="p-6 bg-slate-50 rounded-xl border border-slate-200 shadow-sm transition-all">
-          <div v-if="!taskId" class="flex flex-col items-center py-8 border-2 border-dashed border-slate-300 rounded-lg bg-white hover:border-blue-400 cursor-pointer group" @click="$refs.fileInput.click()">
-            <input type="file" ref="fileInput" class="hidden" @change="handleFileUpload" accept=".txt">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-slate-300 group-hover:text-blue-500 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-            <p class="text-sm font-medium text-slate-600">点击上传待处理的 .txt 文件</p>
+    <!-- Main Content -->
+    <main class="flex-1 flex overflow-hidden">
+      <!-- Left: Function Area (2/3) -->
+      <section class="w-2/3 p-6 flex flex-col gap-4 overflow-y-auto border-r border-gray-200 bg-white">
+        <!-- Upload -->
+        <div class="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 hover:border-blue-400 transition-colors shadow-sm overflow-hidden">
+          <el-upload class="w-full" drag :http-request="handleUpload" :show-file-list="false" :disabled="isUploading || isProcessing">
+            <div class="flex flex-col items-center justify-center h-32 py-4">
+              <template v-if="!isUploading">
+                <i v-if="!fileUploaded" class="el-icon-upload text-4xl text-gray-400 mb-2"></i>
+                <div v-if="!fileUploaded" class="text-gray-600 font-medium text-lg">📂 点击或拖拽上传文本文件 (Max 50MB)</div>
+                <div v-else class="text-blue-600 font-bold text-xl flex items-center">📄 {{ fileName }} (已就绪)</div>
+              </template>
+              <div v-else class="flex items-center gap-3 text-blue-500">
+                <el-icon class="is-loading text-2xl"><Loading /></el-icon>
+                <span class="text-lg font-medium">正在分析文件...</span>
+              </div>
+            </div>
+          </el-upload>
+        </div>
+
+        <!-- Processing Panels -->
+        <div class="grid grid-cols-2 gap-4">
+          <!-- Automatic Processing -->
+          <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <h2 class="text-base font-bold mb-3 border-b border-gray-200 pb-2 text-gray-700">⚙️ 自动处理 (Automatic)</h2>
+            <div class="space-y-1">
+              <el-checkbox v-model="autoOptions.newline" label="换行符归一化 (LF)" class="w-full" />
+              <el-checkbox v-model="autoOptions.html" label="HTML 标签清理" class="w-full" />
+              <el-checkbox v-model="autoOptions.illegal" label="非法/控制字符过滤" class="w-full" />
+              <el-checkbox v-model="autoOptions.fullwidth" label="全半角转换 (数字/字母/标点)" class="w-full" />
+              <el-checkbox v-model="autoOptions.paragraph" label="段落清洗 (首尾去杂/自动缩进)" class="w-full" />
+              <el-checkbox v-model="autoOptions.emptyline" label="空行压缩 (2行)" class="w-full" />
+              <el-checkbox v-model="autoOptions.stitch" label="断句缝合 (修复非正常换行)" class="w-full" />
+              <el-checkbox label="去除广告 (暂不支持)" disabled class="w-full opacity-50" />
+            </div>
           </div>
-          <div v-else class="flex items-center justify-between">
-             <div class="flex items-center space-x-3">
-                <div class="bg-blue-100 p-2 rounded text-blue-600">
-                   <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+
+          <!-- Manual Processing -->
+          <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <h2 class="text-base font-bold mb-3 border-b border-gray-200 pb-2 text-gray-700">🛠️ 手动处理 (Manual)</h2>
+            <div class="space-y-3">
+              <!-- Inline Manual Filter -->
+              <div class="border border-gray-200 rounded-lg overflow-hidden bg-white">
+                <div class="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-50 transition-colors" @click="manualOptions.manualIllegal = !manualOptions.manualIllegal">
+                  <div class="flex items-center gap-2">
+                    <el-checkbox v-model="manualOptions.manualIllegal" @click.stop />
+                    <span class="text-sm font-medium text-gray-700">手动过滤非法字符</span>
+                    <el-tag v-if="manualBlacklist.size > 0" size="small" type="danger" effect="dark">{{ manualBlacklist.size }}</el-tag>
+                  </div>
+                  <el-icon :class="{'rotate-180': manualOptions.manualIllegal}" class="transition-transform"><ArrowDown /></el-icon>
                 </div>
-                <div>
-                   <p class="font-bold text-slate-800">{{ filename }}</p>
-                   <p class="text-xs text-slate-500">{{ statusMessage }}</p>
+                <div v-if="manualOptions.manualIllegal" class="p-4 border-t border-gray-100 bg-gray-50 space-y-4">
+                  <div class="text-[12px] text-blue-600 bg-blue-50 p-2 rounded border border-blue-100 leading-tight">💡 粘贴包含乱码的文本，点击字符加入黑名单：</div>
+                  <el-input v-model="manualInput" type="textarea" :rows="2" placeholder="在此粘贴包含异常字符的文本..." size="small" @input="parseManualInput" />
+                  <div v-if="parsedChars.length > 0" class="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto p-1">
+                    <button v-for="item in parsedChars" :key="item.code" class="px-2 py-1 rounded border transition-all flex flex-col items-center min-w-[40px]" :class="[manualBlacklist.has(item.char) ? 'bg-red-500 border-red-600 text-white shadow-sm' : item.isInvisible ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-300']" @click="toggleBlacklist(item.char)">
+                      <span class="text-base font-bold leading-none mb-1">{{ item.isInvisible ? '◌' : item.char }}</span>
+                      <span class="text-[9px] font-mono opacity-50">{{ item.code }}</span>
+                    </button>
+                  </div>
+                  <div v-if="manualBlacklist.size > 0" class="flex justify-between items-center pt-2 border-t border-gray-200">
+                    <span class="text-[10px] text-gray-400">已选中 {{ manualBlacklist.size }} 个字符</span>
+                    <el-button size="small" link type="danger" @click="manualBlacklist.clear(); manualInput=''; parsedChars=[]">全部清空</el-button>
+                  </div>
                 </div>
-             </div>
-             <button @click="taskId = ''; uploadStatus = 'idle'" class="text-xs text-blue-600 hover:underline">更换文件</button>
-          </div>
-          <div v-if="uploadStatus === 'processing' || uploadStatus === 'uploading'" class="mt-4">
-             <div class="w-full bg-slate-200 rounded-full h-1.5"><div class="bg-blue-600 h-1.5 rounded-full transition-all" :style="{width: progress+'%'}"></div></div>
-          </div>
-        </section>
-
-        <!-- Step 2: Configuration & Diff Preview -->
-        <div class="grid grid-cols-12 gap-6" :class="{'opacity-50 pointer-events-none': !taskId}">
-           <!-- Config Panel -->
-           <div class="col-span-4 space-y-6">
-              <div class="p-4 bg-white border border-slate-200 rounded-xl shadow-sm">
-                 <h3 class="font-bold text-sm text-slate-700 mb-4 flex items-center"><span class="w-1 h-4 bg-blue-600 mr-2 rounded"></span>基础清洗</h3>
-                 <div class="space-y-3">
-                    <label class="flex items-center space-x-2 text-xs text-slate-600 cursor-pointer">
-                       <input type="checkbox" v-model="config.formatting.normalize_line_breaks" class="rounded text-blue-600">
-                       <span>换行符归一化 (\n)</span>
-                    </label>
-                    <label class="flex items-center space-x-2 text-xs text-slate-600 cursor-pointer">
-                       <input type="checkbox" v-model="config.base_cleaning.remove_control_chars" class="rounded text-blue-600">
-                       <span>移除不可见字符/控制符</span>
-                    </label>
-                    <label class="flex items-center space-x-2 text-xs text-slate-600 cursor-pointer">
-                       <input type="checkbox" v-model="config.base_cleaning.remove_html" class="rounded text-blue-600">
-                       <span>剥离 HTML 标签</span>
-                    </label>
-                 </div>
               </div>
 
-              <div class="p-4 bg-white border border-slate-200 rounded-xl shadow-sm">
-                 <h3 class="font-bold text-sm text-slate-700 mb-4 flex items-center"><span class="w-1 h-4 bg-blue-600 mr-2 rounded"></span>排版格式</h3>
-                 <div class="space-y-4">
-                    <div class="flex items-center justify-between">
-                       <span class="text-xs text-slate-600">空行保留阈值</span>
-                       <input type="number" v-model="config.formatting.empty_line_threshold" class="w-12 border rounded px-1 py-0.5 text-xs text-center" min="0" max="5">
+              <!-- Inline Chapter Recognition -->
+              <div class="border border-gray-200 rounded-lg overflow-hidden bg-white">
+                <div class="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-50 transition-colors" @click="manualOptions.chapter = !manualOptions.chapter">
+                  <div class="flex items-center gap-2">
+                    <el-checkbox v-model="manualOptions.chapter" @click.stop />
+                    <span class="text-sm font-medium text-gray-700">章节识别与序号重排</span>
+                    <el-tag v-if="detectedChapters.length > 0" size="small" type="success" effect="dark">{{ detectedChapters.length }}</el-tag>
+                  </div>
+                  <el-icon :class="{'rotate-180': manualOptions.chapter}" class="transition-transform"><ArrowDown /></el-icon>
+                </div>
+                <div v-if="manualOptions.chapter" class="p-4 border-t border-gray-100 bg-gray-50 space-y-4">
+                  <div class="space-y-2 bg-white p-3 rounded border border-gray-200 shadow-sm">
+                    <div class="text-xs font-bold text-blue-600 mb-1 flex items-center gap-1">✨ 智能引导：输入样例推导正则</div>
+                    <div class="flex gap-2">
+                      <el-input v-model="chapterConfig.sample" placeholder="例如: ☆卷二 chap124 陨落☆" size="small" class="flex-1" />
+                      <el-button type="primary" size="small" @click="handleDeduce" :loading="isDeducing">推导</el-button>
                     </div>
-                    <label class="flex items-center space-x-2 text-xs text-slate-600 cursor-pointer">
-                       <input type="checkbox" v-model="config.formatting.paragraph_indent" class="rounded text-blue-600">
-                       <span>首尾去杂 (Trim)</span>
-                    </label>
-                 </div>
-              </div>
-
-              <div class="p-4 bg-white border border-slate-200 rounded-xl shadow-sm">
-                 <h3 class="font-bold text-sm text-slate-700 mb-4 flex items-center"><span class="w-1 h-4 bg-blue-600 mr-2 rounded"></span>章节提取</h3>
-                 <div class="space-y-3">
-                    <label class="flex items-center space-x-2 text-xs text-slate-600 cursor-pointer">
-                       <input type="checkbox" v-model="config.chapter.built_in_patterns" class="rounded text-blue-600">
-                       <span>内置模式 (第X章/Chapter)</span>
-                    </label>
-                    <div class="space-y-1">
-                       <span class="text-[10px] text-slate-400 uppercase font-bold">自定义正则</span>
-                       <input type="text" v-model="config.chapter.custom_regex" placeholder="^第.*章$" class="w-full border rounded px-2 py-1 text-xs font-mono">
+                  </div>
+                  <div class="space-y-1">
+                    <div class="text-[11px] text-gray-400 font-bold uppercase tracking-wider px-1">正则表达式</div>
+                    <el-input v-model="chapterConfig.regex" placeholder="留空使用内置正则库..." size="small" @input="refreshChapterPreview" />
+                  </div>
+                  <div class="flex items-center justify-between px-1">
+                    <span class="text-xs text-gray-600 font-medium">章节序号重排</span>
+                    <el-switch v-model="chapterConfig.reorder" size="small" />
+                  </div>
+                  <div v-if="detectedChapters.length > 0" class="space-y-2">
+                    <div class="text-[11px] text-gray-400 font-bold uppercase tracking-wider px-1">实时目录预览 (前5条)</div>
+                    <div class="bg-white border border-gray-200 rounded p-2 max-h-32 overflow-y-auto shadow-inner">
+                      <div v-for="ch in detectedChapters.slice(0, 5)" :key="ch.index" class="text-[12px] text-gray-600 py-1 border-b border-gray-50 last:border-0 truncate">
+                        <span class="text-blue-500 font-mono mr-2">{{ String(ch.index).padStart(2, '0') }}.</span>
+                        {{ ch.title }}
+                      </div>
+                      <div v-if="detectedChapters.length > 5" class="text-[10px] text-gray-400 text-center pt-1 italic">... 共 {{ detectedChapters.length }} 个章节</div>
                     </div>
-                 </div>
+                  </div>
+                </div>
               </div>
-           </div>
-
-           <!-- Diff Preview -->
-           <div class="col-span-8 space-y-4 flex flex-col h-[500px]">
-              <div class="flex items-center justify-between px-2">
-                 <span class="text-xs font-bold text-slate-500">实时 Diff 预览 (前 200 行)</span>
-                 <span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">预览模式</span>
-              </div>
-              <div class="flex-1 bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-                 <Diff 
-                   v-if="taskId && originalSnippet" 
-                   mode="split" 
-                   theme="light" 
-                   language="plaintext" 
-                   :prev="originalSnippet" 
-                   :current="cleanedSnippet" 
-                   class="h-full text-xs"
-                 />
-                 <div v-else class="h-full flex items-center justify-center text-slate-300 italic text-sm">
-                    上传文件后查看 Diff
-                 </div>
-              </div>
-           </div>
+            </div>
+          </div>
         </div>
 
-        <div class="flex flex-col items-center pt-8 border-t border-slate-100">
-           <button 
-             @click="startProcessing"
-             class="px-12 py-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-xl hover:shadow-2xl font-bold text-lg disabled:opacity-50" 
-             :disabled="!taskId || uploadStatus === 'processing'">
-             开始深度清洗
-           </button>
-           <div v-if="uploadStatus === 'done'" class="mt-6 flex flex-col items-center animate-bounce">
-              <button @click="downloadFile" class="flex items-center px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold shadow-lg">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                立即下载清洗后的文本
-              </button>
-           </div>
+        <!-- Start Process Button & Progress -->
+        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 shadow-sm space-y-3">
+          <el-button type="success" size="large" class="w-full h-16 text-xl font-bold" @click="handleProcess" :disabled="!fileUploaded || isProcessing" :loading="isProcessing">
+            🚀 开始处理
+          </el-button>
+          <el-progress v-if="isProcessing" :percentage="processingProgress" :stroke-width="10" striped striped-flow />
         </div>
-      </div>
+
+        <!-- Save Button -->
+        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 shadow-sm">
+          <el-button type="warning" size="large" class="w-full h-12 text-lg font-bold" @click="handleSave" :disabled="!fileUploaded || isProcessing">💾 保存处理后的文件</el-button>
+        </div>
+
+        <!-- Log Panel -->
+        <div class="mt-auto">
+          <div class="bg-gray-100 rounded-t-lg border-t border-x border-gray-200 p-2 cursor-pointer hover:bg-gray-200 transition-colors flex justify-between items-center shadow-sm" @click="logVisible = !logVisible">
+            <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">▼ 日志信息 (Log)</span>
+            <span class="text-xs text-gray-400">{{ logVisible ? '点击折叠' : '点击展开' }}</span>
+          </div>
+          <div v-show="logVisible" class="bg-gray-50 p-3 h-32 overflow-y-auto border border-gray-200 font-mono text-xs">
+            <div v-for="(log, index) in logEntries" :key="index" class="mb-1 border-b border-gray-100 pb-1 last:border-0">
+              <span class="text-gray-400">[{{ log.time }}]</span>
+              <span :class="{'text-blue-600': log.level === 'INFO', 'text-orange-500': log.level === 'WARN', 'text-red-600': log.level === 'ERROR'}" class="ml-2 font-bold uppercase">{{ log.level }}:</span>
+              <span class="ml-2 text-gray-700">{{ log.message }}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right: Preview Area -->
+      <section class="w-1/3 p-4 bg-gray-100 flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between mb-3 shrink-0 px-1">
+          <h2 class="text-base font-bold text-gray-700 uppercase tracking-wide">📄 文本预览区 (前500行)</h2>
+          <span class="text-xs text-blue-600 font-bold px-2 py-1 bg-blue-50 rounded" v-if="fileUploaded">{{ fileName }}</span>
+        </div>
+        <div class="flex-1 bg-white border border-gray-200 rounded-xl font-mono text-sm overflow-y-auto text-gray-600 leading-relaxed shadow-inner custom-scrollbar">
+          <div v-if="!fileUploaded && !isProcessing" class="h-full flex flex-col items-center justify-center text-gray-400 italic gap-2">
+            <i class="el-icon-document text-3xl opacity-20"></i>请上传文件以显示预览
+          </div>
+          <div v-else-if="isProcessing" class="h-full flex items-center justify-center text-blue-400 italic gap-2 animate-pulse">正在处理中 ({{ processingProgress }}%)...</div>
+          <div v-else class="p-4 min-w-full">
+            <div v-for="(line, idx) in previewLines" :key="idx" class="flex hover:bg-blue-50 transition-colors group">
+              <span class="w-10 shrink-0 text-right pr-3 text-gray-300 select-none group-hover:text-blue-200">{{ idx + 1 }}</span>
+              <span class="whitespace-pre-wrap break-all flex-1">{{ line || ' ' }}</span>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
-
-    <!-- Right Sidebar: Report & Navigation -->
-    <aside class="w-1/3 bg-slate-100/50 flex flex-col overflow-hidden">
-       <div class="p-6 overflow-y-auto space-y-6 flex-1">
-          <div v-if="uploadStatus === 'done' && report" class="space-y-4">
-             <h2 class="font-bold text-lg text-slate-800">清洗报告</h2>
-             <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <div class="grid grid-cols-2 gap-4 text-sm">
-                   <div class="text-slate-500">检测编码</div><div class="font-mono text-right text-blue-600 font-bold uppercase">{{ report.encoding_detected }}</div>
-                   <div class="text-slate-500">识别章节</div><div class="text-right font-bold">{{ report.chapters_found }}</div>
-                   <div class="text-slate-500">压缩效率</div><div class="text-right font-bold text-green-600">{{ (100 - (report.cleaned_size/report.original_size*100)).toFixed(1) }}%</div>
-                   <div class="text-slate-500">原始大小</div><div class="text-right">{{ (report.original_size/1024/1024).toFixed(2) }} MB</div>
-                   <div class="text-slate-500">最终大小</div><div class="text-right">{{ (report.cleaned_size/1024/1024).toFixed(2) }} MB</div>
-                </div>
-             </div>
-          </div>
-
-          <div class="space-y-4">
-             <div class="flex items-center justify-between">
-                <h2 class="font-bold text-lg text-slate-800">目录概览</h2>
-                <span class="text-[10px] bg-slate-200 px-2 py-0.5 rounded-full font-bold text-slate-500">{{ chapters.length }} 章节</span>
-             </div>
-             <div class="bg-white rounded-xl border border-slate-200 shadow-sm min-h-[300px] overflow-hidden">
-                <div v-if="chapters.length === 0" class="h-[300px] flex items-center justify-center text-slate-300 text-sm italic p-10 text-center">
-                   未检测到章节，尝试在左侧修改匹配模式
-                </div>
-                <div v-else class="max-h-[600px] overflow-y-auto divide-y divide-slate-100">
-                   <div v-for="ch in chapters" :key="ch.line_index" class="p-3 text-xs hover:bg-slate-50 cursor-default flex items-center space-x-2">
-                      <span class="w-8 text-slate-300 font-mono text-[10px]">#{{ ch.original_order }}</span>
-                      <span class="text-slate-600 truncate">{{ ch.title }}</span>
-                   </div>
-                </div>
-             </div>
-          </div>
-       </div>
-       <footer class="p-4 bg-slate-800 text-slate-400 text-[10px] flex justify-between uppercase tracking-widest font-bold">
-          <span>Version 1.0.0</span>
-          <span>&copy; 2026 27TXT</span>
-       </footer>
-    </aside>
   </div>
 </template>
 
 <style>
-.vue-diff-wrapper { border-radius: 0.75rem; }
-.vue-diff-row-delete { background-color: #fee2e2 !important; }
-.vue-diff-row-insert { background-color: #dcfce7 !important; }
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+/* 覆盖 Element Plus 的全局样式 */
+:root { --el-color-primary: #2563eb; --el-color-success: #16a34a; --el-color-warning: #ea580c; }
+.el-checkbox { --el-checkbox-text-color: #374151; --el-checkbox-checked-text-color: #2563eb; margin-right: 0 !important; height: 32px; }
+.el-checkbox__label { font-size: 14px; }
+.el-upload-dragger { background-color: transparent !important; border: none !important; padding: 0 !important; width: 100% !important; }
+.el-upload-dragger:hover { border: none !important; }
+body { margin: 0; padding: 0; overflow: hidden; background-color: #f9fafb; }
+#app { width: 100vw; height: 100vh; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
 </style>

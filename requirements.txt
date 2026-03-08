@@ -1,11 +1,8 @@
 fastapi
-uvicorn[standard]
-charset-normalizer
+uvicorn
 regex
+charset-normalizer
 pydantic
 python-multipart
-python-jose[cryptography]
-passlib[bcrypt]
-jinja2
-python-dotenv
-pytest
+python-magic-bin; sys_platform == 'win32'
+python-magic; sys_platform != 'win32'

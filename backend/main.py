@@ -1,20 +1,26 @@
 import os
-import uvicorn
-import socket
 import uuid
+import charset_normalizer
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Dict, Any
+from fastapi.responses import FileResponse, StreamingResponse
+import io
+import urllib.parse
+import socket
+import webbrowser
+import threading
 import time
 import asyncio
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
-from pydantic import BaseModel
-from typing import Dict, List, Optional, Any
-from backend.models.config import RuleConfig
-from backend.core.cleaning import process_chunk, detect_encoding, remove_bom, identify_chapters
 
-app = FastAPI(title="27txt-formatter-backend")
+# Internal modules
+from core.cleaner import clean_text_pipeline
+from core.chapter import detect_chapters, deduce_regex, reorder_chapters
 
-# CORS Setup
+app = FastAPI(title="27 TXT Formatter API")
+
+# Enable CORS for frontend development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,166 +29,160 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory task storage
-tasks: Dict[str, dict] = {}
-UPLOAD_DIR = "temp_uploads"
-OUTPUT_DIR = "temp_outputs"
+# In-memory storage
+tasks = {}
+progress_states = {} # task_id -> int
 
-for d in [UPLOAD_DIR, OUTPUT_DIR]:
-    if not os.path.exists(d):
-        os.makedirs(d)
+# --- Pydantic Models ---
 
-@app.get("/")
-async def root():
-    return {"message": "27txt Formatter API is running"}
+class UploadResponse(BaseModel):
+    task_id: str
+    file_name: str
+    preview: List[str]
+    encoding: str
+    has_bom: bool
 
-@app.post("/api/upload")
+class ProcessRequest(BaseModel):
+    options: dict
+
+class ProcessResponse(BaseModel):
+    preview: List[str]
+    logs: List[str]
+    chapters: List[Dict[str, Any]] = []
+
+class DeduceRequest(BaseModel):
+    samples: List[str]
+
+# --- Helper Functions ---
+
+def process_initial_txt(content: bytes):
+    result = charset_normalizer.from_bytes(content).best()
+    encoding = result.encoding if result else "utf-8"
+    try:
+        text = content.decode(encoding)
+    except:
+        text = content.decode(encoding, errors="replace")
+    has_bom = text.startswith('\ufeff')
+    if has_bom:
+        text = text.lstrip('\ufeff')
+    return text, encoding, has_bom
+
+# --- API Endpoints ---
+
+@app.post("/api/upload", response_model=UploadResponse)
 async def upload_file(file: UploadFile = File(...)):
+    if not file.filename.endswith('.txt'):
+        raise HTTPException(status_code=400, detail="Only .txt files are allowed")
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (Max 50MB)")
+    text, original_encoding, has_bom = process_initial_txt(content)
     task_id = str(uuid.uuid4())
-    file_path = os.path.join(UPLOAD_DIR, f"{task_id}_{file.filename}")
-    
-    with open(file_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
-    
+    lines = text.splitlines()
     tasks[task_id] = {
-        "filename": file.filename,
-        "file_path": file_path,
-        "output_path": None,
-        "status": "uploaded",
-        "progress": 0,
-        "report": {},
-        "chapters": []
+        "file_name": file.filename,
+        "content": text,
+        "original_content": text,
+        "encoding": original_encoding,
+        "has_bom": has_bom
     }
-    
-    return {"task_id": task_id, "filename": file.filename}
+    progress_states[task_id] = 0
+    return {
+        "task_id": task_id,
+        "file_name": file.filename,
+        "preview": lines[:500],
+        "encoding": original_encoding,
+        "has_bom": has_bom
+    }
 
 @app.get("/api/stream-progress/{task_id}")
 async def stream_progress(task_id: str):
-    if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
-
     async def event_generator():
-        last_progress = -1
         while True:
-            current_progress = tasks[task_id]["progress"]
-            status = tasks[task_id]["status"]
-            if current_progress != last_progress or status in ["done", "error"]:
-                yield f"data: {{\"progress\": {current_progress}, \"status\": \"{status}\"}}\n\n"
-                last_progress = current_progress
-            if status in ["done", "error"]:
-                break
-            await asyncio.sleep(0.2)
-    
+            if task_id in progress_states:
+                progress = progress_states[task_id]
+                yield f"data: {progress}\n\n"
+                if progress >= 100:
+                    break
+            else:
+                yield "data: 0\n\n"
+            await asyncio.sleep(0.5)
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-async def run_cleaning_pipeline(task_id: str, config: RuleConfig):
+@app.post("/api/process/{task_id}", response_model=ProcessResponse)
+async def process_file(task_id: str, request: ProcessRequest):
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    progress_states[task_id] = 0
     task = tasks[task_id]
-    input_path = task["file_path"]
-    output_filename = f"cleaned_{task['filename']}"
-    output_path = os.path.join(OUTPUT_DIR, output_filename)
-    task["output_path"] = output_path
+    original_text = task["original_content"]
     
-    start_time = time.time()
+    def update_progress(p):
+        progress_states[task_id] = p
+
+    # 核心清洗流水线
+    processed_text, logs = clean_text_pipeline(original_text, request.options, update_progress)
     
-    try:
-        with open(input_path, "rb") as f:
-            encoding = detect_encoding(f)
-        
-        file_size = os.path.getsize(input_path)
-        chunk_size = 1024 * 1024 
-        processed_size = 0
-        
-        # Read the entire file content to identify chapters (for metadata)
-        # Note: For very large files, we'd do this iteratively, but for 50MB it's manageable in memory
-        with open(input_path, "r", encoding=encoding, errors="ignore") as f:
-            all_content = f.read()
-            task["chapters"] = identify_chapters(all_content, config)
+    # 章节处理
+    chapters = []
+    if request.options.get("chapter", False):
+        update_progress(95) # Artificial progress for chapter detection
+        custom_pattern = request.options.get("chapter_pattern")
+        chapters = detect_chapters(processed_text, custom_pattern)
+        if request.options.get("chapter_reorder", False) and chapters:
+            processed_text = reorder_chapters(processed_text, chapters)
+            logs.append("已完成章节序号物理重排")
+            chapters = detect_chapters(processed_text, custom_pattern)
+    
+    task["content"] = processed_text
+    update_progress(100)
+    
+    lines = processed_text.splitlines()
+    return {
+        "preview": lines[:500],
+        "logs": logs,
+        "chapters": chapters
+    }
 
-        with open(input_path, "r", encoding=encoding, errors="ignore") as fin, \
-             open(output_path, "w", encoding="utf-8", newline='\n') as fout:
-            
-            first_chunk = fin.read(chunk_size)
-            if first_chunk:
-                first_chunk = remove_bom(first_chunk)
-                cleaned = process_chunk(first_chunk, config)
-                fout.write(cleaned)
-                processed_size += len(first_chunk.encode(encoding, errors="ignore"))
-                task["progress"] = int((processed_size / file_size) * 100)
-            
-            while True:
-                chunk = fin.read(chunk_size)
-                if not chunk:
-                    break
-                cleaned = process_chunk(chunk, config)
-                fout.write(cleaned)
-                processed_size += len(chunk.encode(encoding, errors="ignore"))
-                task["progress"] = min(99, int((processed_size / file_size) * 100))
-        
-        end_time = time.time()
-        task["status"] = "done"
-        task["progress"] = 100
-        task["report"] = {
-            "duration": round(end_time - start_time, 2),
-            "original_size": file_size,
-            "cleaned_size": os.path.getsize(output_path),
-            "encoding_detected": encoding,
-            "chapters_found": len(task["chapters"])
-        }
-        
-    except Exception as e:
-        print(f"Error processing {task_id}: {str(e)}")
-        task["status"] = "error"
-        task["message"] = str(e)
+@app.post("/api/chapters/deduce")
+async def api_deduce_regex(request: DeduceRequest):
+    return {"regex": deduce_regex(request.samples)}
 
-@app.post("/api/process/{task_id}")
-async def process_file(task_id: str, config: RuleConfig, background_tasks: BackgroundTasks):
+@app.post("/api/chapters/preview/{task_id}")
+async def api_preview_chapters(task_id: str, request: dict):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-    tasks[task_id]["status"] = "processing"
-    tasks[task_id]["progress"] = 0
-    background_tasks.add_task(run_cleaning_pipeline, task_id, config)
-    return {"message": "Processing started"}
-
-@app.post("/api/preview/{task_id}")
-async def preview_file(task_id: str, config: RuleConfig, lines: int = 200):
-    if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
-        
-    input_path = tasks[task_id]["file_path"]
-    with open(input_path, "rb") as f:
-        encoding = detect_encoding(f)
-    
-    # Read snippet
-    with open(input_path, "r", encoding=encoding, errors="ignore") as f:
-        # Read the first N lines
-        snippet_lines = []
-        for _ in range(lines):
-            line = f.readline()
-            if not line: break
-            snippet_lines.append(line)
-        
-        original_snippet = "".join(snippet_lines)
-        cleaned_snippet = process_chunk(original_snippet, config)
-        chapters = identify_chapters(original_snippet, config)
-        
-        return {
-            "original": original_snippet,
-            "cleaned": cleaned_snippet,
-            "chapters": chapters
-        }
+    text = tasks[task_id]["content"]
+    chapters = detect_chapters(text, request.get("pattern"), request.get("max_length", 35))
+    return {"chapters": chapters}
 
 @app.get("/api/download/{task_id}")
 async def download_file(task_id: str):
-    if task_id not in tasks or tasks[task_id]["status"] != "done":
-        raise HTTPException(status_code=404, detail="File not ready")
-    return FileResponse(tasks[task_id]["output_path"], filename=f"cleaned_{tasks[task_id]['filename']}")
-
-@app.get("/api/report/{task_id}")
-async def get_report(task_id: str):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-    return tasks[task_id]["report"]
+    task = tasks[task_id]
+    name_parts = os.path.splitext(task["file_name"])
+    new_filename = f"{name_parts[0]}-已处理{name_parts[1]}"
+    output = io.BytesIO(task["content"].encode('utf-8'))
+    encoded_filename = urllib.parse.quote(new_filename)
+    return StreamingResponse(
+        output,
+        media_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+    )
+
+def is_port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
+def open_browser(port: int):
+    time.sleep(1.5)
+    webbrowser.open(f"http://localhost:5173")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    import uvicorn
+    port = 8000
+    while is_port_in_use(port): port += 1
+    threading.Thread(target=open_browser, args=(port,), daemon=True).start()
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

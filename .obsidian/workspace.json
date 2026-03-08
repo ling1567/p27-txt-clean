@@ -20,6 +20,41 @@
               "icon": "lucide-file",
               "title": "说明文档"
             }
+          },
+          {
+            "id": "907647fbf484eaa5",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "说明文档2.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "说明文档2"
+            }
+          }
+        ],
+        "currentTab": 1
+      },
+      {
+        "id": "7a09feb0940a0d8b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "cb7077c118a5555e",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "说明文档.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "说明文档"
+            }
           }
         ]
       }
@@ -94,7 +129,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "说明文档.md",
+                "file": "说明文档2.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +139,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "说明文档 的反向链接列表"
+              "title": "说明文档2 的反向链接列表"
             }
           },
           {
@@ -183,46 +218,46 @@
       "bases:新建数据库": false
     }
   },
-  "active": "f0a89aaf97805955",
+  "active": "907647fbf484eaa5",
   "lastOpenFiles": [
-    "temp_uploads/528d5d2b-c290-4be0-bf9b-0cad60d0059d_十九世纪百货公主(www.yqxz.org).txt",
-    "frontend/node_modules/highlight.js/types/index.d.ts",
-    "frontend/node_modules/highlight.js/types",
-    "frontend/node_modules/vue-diff/docs/index.76e61c7d.js",
-    "frontend/node_modules/vue-diff/docs/index.a5dfebb5.css",
-    "frontend/node_modules/vue-diff/docs",
-    "frontend/node_modules/vue-diff/node_modules/vue-demi/bin/vue-demi-switch.js",
-    "frontend/node_modules/vue-diff/node_modules/vue-demi/bin/vue-demi-fix.js",
-    "frontend/node_modules/vue-diff/node_modules/vue-demi/bin",
-    "frontend/node_modules/vue-diff/node_modules/vue-demi/scripts/utils.js",
-    "frontend/node_modules/vue-diff/node_modules/vue-demi/scripts/switch-cli.js",
-    "frontend/node_modules/highlight.js/styles/brown-papersq.png",
-    "frontend/node_modules/highlight.js/VERSION_11_UPGRADE.md",
-    "frontend/node_modules/highlight.js/VERSION_10_UPGRADE.md",
-    "frontend/node_modules/highlight.js/SUPPORTED_LANGUAGES.md",
-    "frontend/node_modules/highlight.js/SECURITY.md",
-    "frontend/node_modules/highlight.js/README.md",
-    "frontend/node_modules/highlight.js/CHANGES.md",
-    "frontend/node_modules/diff-match-patch/README.md",
-    "frontend/node_modules/form-data/README.md",
-    "frontend/node_modules/form-data/CHANGELOG.md",
-    "frontend/node_modules/axios/lib/helpers/README.md",
-    "frontend/node_modules/axios/lib/env/README.md",
-    "frontend/node_modules/axios/lib/core/README.md",
-    "frontend/node_modules/axios/lib/adapters/README.md",
-    "frontend/node_modules/axios/README.md",
-    "frontend/node_modules/axios/MIGRATION_GUIDE.md",
-    "frontend/node_modules/axios/CHANGELOG.md",
+    "frontend/src/store/ruleStore.ts",
+    "frontend/src/store",
+    "frontend/node_modules/lodash-es/lang.js",
+    "frontend/node_modules/lodash-es/date.default.js",
+    "frontend/node_modules/lodash-es/_lazyClone.js",
+    "frontend/node_modules/lodash-es/_copySymbols.js",
+    "frontend/node_modules/lodash-es/_copySymbolsIn.js",
+    "frontend/node_modules/lodash-es/seq.js",
+    "frontend/node_modules/lodash-es/function.js",
+    "frontend/node_modules/lodash-es/_cloneTypedArray.js",
+    "frontend/node_modules/lodash-es/number.default.js",
+    "frontend/node_modules/pinia/README.md",
+    "frontend/node_modules/copy-anything/README.md",
+    "frontend/node_modules/@vue/devtools-api/README.md",
+    "frontend/node_modules/is-what/README.md",
+    "frontend/node_modules/superjson/README.md",
+    "frontend/node_modules/rfdc/readme.md",
+    "frontend/node_modules/perfect-debounce/README.md",
+    "frontend/node_modules/speakingurl/README.md",
+    "frontend/node_modules/speakingurl/CHANGELOG.md",
+    "frontend/node_modules/mitt/README.md",
+    "frontend/node_modules/birpc/README.md",
+    "frontend/node_modules/@vue/devtools-shared/README.md",
+    "frontend/node_modules/@vue/devtools-kit/README.md",
+    "frontend/node_modules/fast-glob/node_modules/glob-parent/README.md",
+    "frontend/node_modules/fast-glob/node_modules/glob-parent/CHANGELOG.md",
+    "frontend/node_modules/fast-glob/README.md",
+    "frontend/node_modules/ts-interface-checker/README.md",
+    "frontend/node_modules/sucrase/README.md",
+    "frontend/node_modules/reusify/SECURITY.md",
+    "frontend/node_modules/reusify/README.md",
+    "frontend/node_modules/camelcase-css/README.md",
     "frontend/node_modules/mime-db/README.md",
     "frontend/node_modules/mime-db/HISTORY.md",
-    "frontend/node_modules/dunder-proto/README.md",
-    "frontend/node_modules/dunder-proto/CHANGELOG.md",
-    "frontend/node_modules/math-intrinsics/README.md",
-    "frontend/node_modules/math-intrinsics/CHANGELOG.md",
-    "frontend/node_modules/gopd/README.md",
-    "frontend/node_modules/gopd/CHANGELOG.md",
-    "frontend/node_modules/has-symbols/README.md",
+    "frontend/node_modules/axios/lib/helpers/README.md",
+    "frontend/node_modules/axios/lib/env/README.md",
     "frontend/src/assets/vue.svg",
-    "frontend/public/vite.svg"
+    "frontend/public/vite.svg",
+    "frontend/node_modules/highlight.js/styles/brown-papersq.png"
   ]
 }
