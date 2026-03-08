@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+charset-normalizer
+regex
+pydantic
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
+jinja2
+python-dotenv
+pytest
