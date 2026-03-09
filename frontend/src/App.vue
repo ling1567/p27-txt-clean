@@ -286,9 +286,6 @@ const handleSave = async () => {
   }
 }
 
-import { ref, onUnmounted, nextTick, onMounted } from 'vue'
-import axios from 'axios'
-// ... (skip imports)
 onUnmounted(() => {
   if (sseSource) sseSource.close()
 })
