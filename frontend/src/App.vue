@@ -16,7 +16,14 @@ const { autoOptions, manualOptions, manualBlacklist, chapterConfig } = storeToRe
 const task_id = ref('')
 const fileUploaded = ref(false)
 const fileName = ref('')
-const previewLines = ref<string[]>([])
+
+interface PreviewLine {
+  text: string;
+  chapterIndex: number;
+}
+const previewLines = ref<PreviewLine[]>([])
+const isWaterfall = ref(true)
+const isLoadingNext = ref(false)
 const logEntries = ref<{ time: string, level: string, message: string }[]>([
   { time: new Date().toLocaleTimeString(), level: 'INFO', message: '系统启动成功' }
 ])
@@ -93,7 +100,7 @@ const handleDeduce = async () => {
   }
 }
 
-const handleChapterChange = async (index: number) => {
+const handleChapterChange = async (index: number, append = false) => {
   if (!task_id.value || index === null) return
   const currentChapter = detectedChapters.value.find(c => c.index === index)
   if (!currentChapter) return
@@ -108,18 +115,52 @@ const handleChapterChange = async (index: number) => {
       start_line: startLine,
       end_line: endLine
     })
-    previewLines.value = response.data.preview
     
-    // 重置滚动位置到顶部
-    nextTick(() => {
-      if (previewScrollContainer.value) {
-        previewScrollContainer.value.scrollTop = 0
-      }
-    })
+    const newLines = response.data.preview.map((text: string) => ({ text, chapterIndex: index }))
     
-    addLog(`已跳转至章节: ${currentChapter.title}`)
+    if (append) {
+      previewLines.value.push(...newLines)
+    } else {
+      previewLines.value = newLines
+      selectedChapterIndex.value = index
+      // 重置滚动位置到顶部 (仅在手动切换章节时)
+      nextTick(() => {
+        if (previewScrollContainer.value) {
+          previewScrollContainer.value.scrollTop = 0
+        }
+      })
+    }
+    
+    if (!append) addLog(`已跳转至章节: ${currentChapter.title}`)
+    else addLog(`已自动加载下一章: ${currentChapter.title}`)
   } catch (e) {
     ElMessage.error('获取章节内容失败')
+  }
+}
+
+const handlePreviewScroll = async () => {
+  if (!previewScrollContainer.value || !isWaterfall.value || isLoadingNext.value) return
+  
+  const { scrollTop, scrollHeight, clientHeight } = previewScrollContainer.value
+  
+  // 1. 自动切换下拉框章节：找到当前可见的第一行对应的章节
+  // 估算行高约为 24px
+  const lineIdx = Math.floor(scrollTop / 24)
+  if (previewLines.value[lineIdx]) {
+    const activeChapterIndex = previewLines.value[lineIdx].chapterIndex
+    if (activeChapterIndex !== selectedChapterIndex.value) {
+      selectedChapterIndex.value = activeChapterIndex
+    }
+  }
+
+  // 2. 瀑布流加载下一章
+  if (scrollTop + clientHeight > scrollHeight - 300) {
+    const lastChapterIndex = previewLines.value[previewLines.value.length - 1]?.chapterIndex
+    if (lastChapterIndex !== undefined && lastChapterIndex < detectedChapters.value.length) {
+      isLoadingNext.value = true
+      await handleChapterChange(lastChapterIndex + 1, true)
+      isLoadingNext.value = false
+    }
   }
 }
 
@@ -141,7 +182,7 @@ const handleUpload = async (options: any) => {
     
     task_id.value = data.task_id
     fileName.value = data.file_name
-    previewLines.value = data.preview
+    previewLines.value = data.preview.map((text: string) => ({ text, chapterIndex: 0 }))
     fileUploaded.value = true
     selectedChapterIndex.value = null
     
@@ -199,7 +240,7 @@ const handleProcess = async () => {
     })
     
     const data = response.data
-    previewLines.value = data.preview
+    previewLines.value = data.preview.map((text: string) => ({ text, chapterIndex: 0 }))
     detectedChapters.value = data.chapters
     
     // 如果用户之前选择了具体章节，刷新后尝试保持在该章节
@@ -262,7 +303,12 @@ onUnmounted(() => {
       >
         <el-icon><Expand v-if="isSidebarCollapsed" /><Fold v-else /></el-icon>
       </el-button>
-      <h1 class="text-xl font-bold text-blue-600">27 TXT Formatter - 文本清理工具</h1>
+      <h1 
+        class="text-xl font-bold text-blue-600 transition-all duration-300 ease-in-out overflow-hidden whitespace-nowrap"
+        :class="isSidebarCollapsed ? 'w-0 opacity-0 invisible' : 'max-w-xl opacity-100 visible'"
+      >
+        27 TXT Formatter - 文本清理工具
+      </h1>
     </header>
 
     <!-- Main Content -->
@@ -414,7 +460,12 @@ onUnmounted(() => {
       <!-- Right: Preview Area -->
       <section class="flex-1 p-4 bg-gray-100 flex flex-col overflow-hidden transition-all duration-300 ease-in-out">
         <div class="flex items-center justify-between mb-3 shrink-0 px-1 gap-2">
-          <h2 class="text-base font-bold text-gray-700 uppercase tracking-wide whitespace-nowrap">📄 文本预览</h2>
+          <div class="flex items-center gap-2">
+            <h2 class="text-base font-bold text-gray-700 uppercase tracking-wide whitespace-nowrap">📄 文本预览</h2>
+            <el-tooltip content="开启后，读完当前章节自动加载下一章" placement="top">
+              <el-checkbox v-model="isWaterfall" size="small" class="ml-2"><span class="text-[10px] text-gray-400">瀑布流</span></el-checkbox>
+            </el-tooltip>
+          </div>
           <el-select 
             v-model="selectedChapterIndex" 
             placeholder="按章节读取" 
@@ -432,7 +483,7 @@ onUnmounted(() => {
           </el-select>
           <span class="text-xs text-blue-600 font-bold px-2 py-1 bg-blue-50 rounded truncate max-w-[80px]" v-if="fileUploaded" :title="fileName">{{ fileName }}</span>
         </div>
-        <div ref="previewScrollContainer" class="flex-1 bg-white border border-gray-200 rounded-xl font-mono text-sm overflow-y-auto text-gray-600 leading-relaxed shadow-inner custom-scrollbar">
+        <div ref="previewScrollContainer" @scroll="handlePreviewScroll" class="flex-1 bg-white border border-gray-200 rounded-xl font-mono text-sm overflow-y-auto text-gray-600 leading-relaxed shadow-inner custom-scrollbar relative">
           <div v-if="!fileUploaded && !isProcessing" class="h-full flex flex-col items-center justify-center text-gray-400 italic gap-2">
             <el-icon class="text-4xl opacity-20 mb-1"><Document /></el-icon>
             请上传文件以显示预览
@@ -441,7 +492,10 @@ onUnmounted(() => {
           <div v-else class="p-4 min-w-full">
             <div v-for="(line, idx) in previewLines" :key="idx" class="flex hover:bg-blue-50 transition-colors group">
               <span class="w-10 shrink-0 text-right pr-3 text-gray-300 select-none group-hover:text-blue-200">{{ idx + 1 }}</span>
-              <span class="whitespace-pre-wrap break-all flex-1">{{ line || ' ' }}</span>
+              <span class="whitespace-pre-wrap break-all flex-1">{{ line.text || ' ' }}</span>
+            </div>
+            <div v-if="isLoadingNext" class="py-4 text-center text-blue-400 italic text-xs animate-pulse border-t border-gray-100 mt-2">
+              正在加载下一章节...
             </div>
           </div>
         </div>
