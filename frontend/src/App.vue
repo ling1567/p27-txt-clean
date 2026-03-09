@@ -6,7 +6,7 @@ import { useRuleStore } from './store/ruleStore'
 import { storeToRefs } from 'pinia'
 
 // API base URL
-const API_BASE = 'http://localhost:8000'
+const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : window.location.origin
 
 // Pinia Store
 const store = useRuleStore()
@@ -286,6 +286,9 @@ const handleSave = async () => {
   }
 }
 
+import { ref, onUnmounted, nextTick, onMounted } from 'vue'
+import axios from 'axios'
+// ... (skip imports)
 onUnmounted(() => {
   if (sseSource) sseSource.close()
 })

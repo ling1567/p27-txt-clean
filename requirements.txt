@@ -1,8 +1,8 @@
 fastapi
 uvicorn
+python-multipart
 regex
 charset-normalizer
 pydantic
-python-multipart
-python-magic-bin; sys_platform == 'win32'
-python-magic; sys_platform != 'win32'
+pywin32; sys_platform == 'win32'
+pyinstaller
