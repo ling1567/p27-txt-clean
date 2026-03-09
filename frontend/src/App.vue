@@ -209,13 +209,17 @@ onUnmounted(() => {
       <!-- Left: Function Area (2/3) -->
       <section class="w-2/3 p-6 flex flex-col gap-4 overflow-y-auto border-r border-gray-200 bg-white">
         <!-- Upload -->
-        <div class="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 hover:border-blue-400 transition-colors shadow-sm overflow-hidden">
+        <div class="shrink-0 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 hover:border-blue-400 transition-colors shadow-sm overflow-hidden">
           <el-upload class="w-full" drag :http-request="handleUpload" :show-file-list="false" :disabled="isUploading || isProcessing">
-            <div class="flex flex-col items-center justify-center h-32 py-4">
+            <div class="flex flex-col items-center justify-center h-32 py-4 w-full">
               <template v-if="!isUploading">
-                <i v-if="!fileUploaded" class="el-icon-upload text-4xl text-gray-400 mb-2"></i>
+                <el-icon v-if="!fileUploaded" class="text-4xl text-gray-400 mb-2"><Upload /></el-icon>
                 <div v-if="!fileUploaded" class="text-gray-600 font-medium text-lg">📂 点击或拖拽上传文本文件 (Max 50MB)</div>
-                <div v-else class="text-blue-600 font-bold text-xl flex items-center">📄 {{ fileName }} (已就绪)</div>
+                <div v-else class="text-blue-600 font-bold text-xl flex items-center justify-center w-full px-6">
+                  <el-icon class="mr-2 text-2xl"><Document /></el-icon>
+                  <span class="truncate max-w-[70%]">{{ fileName }}</span>
+                  <span class="ml-2 text-sm font-normal text-gray-400 shrink-0">(已就绪)</span>
+                </div>
               </template>
               <div v-else class="flex items-center gap-3 text-blue-500">
                 <el-icon class="is-loading text-2xl"><Loading /></el-icon>
@@ -226,7 +230,7 @@ onUnmounted(() => {
         </div>
 
         <!-- Processing Panels -->
-        <div class="grid grid-cols-2 gap-4">
+        <div class="shrink-0 grid grid-cols-2 gap-4">
           <!-- Automatic Processing -->
           <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
             <h2 class="text-base font-bold mb-3 border-b border-gray-200 pb-2 text-gray-700">⚙️ 自动处理 (Automatic)</h2>
@@ -351,7 +355,8 @@ onUnmounted(() => {
         </div>
         <div class="flex-1 bg-white border border-gray-200 rounded-xl font-mono text-sm overflow-y-auto text-gray-600 leading-relaxed shadow-inner custom-scrollbar">
           <div v-if="!fileUploaded && !isProcessing" class="h-full flex flex-col items-center justify-center text-gray-400 italic gap-2">
-            <i class="el-icon-document text-3xl opacity-20"></i>请上传文件以显示预览
+            <el-icon class="text-4xl opacity-20 mb-1"><Document /></el-icon>
+            请上传文件以显示预览
           </div>
           <div v-else-if="isProcessing" class="h-full flex items-center justify-center text-blue-400 italic gap-2 animate-pulse">正在处理中 ({{ processingProgress }}%)...</div>
           <div v-else class="p-4 min-w-full">
@@ -371,7 +376,16 @@ onUnmounted(() => {
 :root { --el-color-primary: #2563eb; --el-color-success: #16a34a; --el-color-warning: #ea580c; }
 .el-checkbox { --el-checkbox-text-color: #374151; --el-checkbox-checked-text-color: #2563eb; margin-right: 0 !important; height: 32px; }
 .el-checkbox__label { font-size: 14px; }
-.el-upload-dragger { background-color: transparent !important; border: none !important; padding: 0 !important; width: 100% !important; }
+.el-upload-dragger { 
+  background-color: transparent !important; 
+  border: none !important; 
+  padding: 0 !important; 
+  width: 100% !important;
+  height: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
 .el-upload-dragger:hover { border: none !important; }
 body { margin: 0; padding: 0; overflow: hidden; background-color: #f9fafb; }
 #app { width: 100vw; height: 100vh; }

@@ -220,6 +220,8 @@
   },
   "active": "907647fbf484eaa5",
   "lastOpenFiles": [
+    "GEMINI.md",
+    "说明文档2.md",
     "frontend/node_modules/thenify-all/README.md",
     "frontend/node_modules/thenify-all/package.json",
     "frontend/node_modules/thenify-all/LICENSE",
@@ -254,8 +256,6 @@
     "frontend/node_modules/fast-glob/node_modules/glob-parent/CHANGELOG.md",
     "frontend/node_modules/fast-glob/README.md",
     "frontend/node_modules/ts-interface-checker/README.md",
-    "frontend/node_modules/sucrase/README.md",
-    "frontend/node_modules/reusify/SECURITY.md",
     "frontend/src/assets/vue.svg",
     "frontend/public/vite.svg",
     "frontend/node_modules/highlight.js/styles/brown-papersq.png"
