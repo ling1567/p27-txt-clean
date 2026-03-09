@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onUnmounted } from 'vue'
+import { ref, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { useRuleStore } from './store/ruleStore'
@@ -27,6 +27,8 @@ const isProcessing = ref(false)
 const detectedChapters = ref<any[]>([])
 const isDeducing = ref(false)
 const selectedChapterIndex = ref<number | null>(null)
+const isSidebarCollapsed = ref(false)
+const previewScrollContainer = ref<HTMLElement | null>(null)
 
 let sseSource: EventSource | null = null
 
@@ -107,6 +109,14 @@ const handleChapterChange = async (index: number) => {
       end_line: endLine
     })
     previewLines.value = response.data.preview
+    
+    // 重置滚动位置到顶部
+    nextTick(() => {
+      if (previewScrollContainer.value) {
+        previewScrollContainer.value.scrollTop = 0
+      }
+    })
+    
     addLog(`已跳转至章节: ${currentChapter.title}`)
   } catch (e) {
     ElMessage.error('获取章节内容失败')
@@ -243,14 +253,25 @@ onUnmounted(() => {
 <template>
   <div class="h-screen w-screen bg-gray-50 text-gray-800 flex flex-col font-sans overflow-hidden">
     <!-- Header -->
-    <header class="h-14 bg-white border-b border-gray-200 flex items-center px-6 shadow-sm shrink-0">
+    <header class="h-14 bg-white border-b border-gray-200 flex items-center px-4 shadow-sm shrink-0 gap-3">
+      <el-button 
+        type="primary" 
+        link 
+        class="text-xl p-2 hover:bg-gray-100 rounded transition-colors"
+        @click="isSidebarCollapsed = !isSidebarCollapsed"
+      >
+        <el-icon><Expand v-if="isSidebarCollapsed" /><Fold v-else /></el-icon>
+      </el-button>
       <h1 class="text-xl font-bold text-blue-600">27 TXT Formatter - 文本清理工具</h1>
     </header>
 
     <!-- Main Content -->
     <main class="flex-1 flex overflow-hidden">
       <!-- Left: Function Area (2/3) -->
-      <section class="w-2/3 p-6 flex flex-col gap-4 overflow-y-auto border-r border-gray-200 bg-white">
+      <section 
+        class="transition-all duration-300 ease-in-out flex flex-col gap-4 overflow-y-auto border-r border-gray-200 bg-white"
+        :class="isSidebarCollapsed ? 'w-0 opacity-0 invisible overflow-hidden border-0 p-0' : 'w-2/3 p-6 opacity-100 visible'"
+      >
         <!-- Upload -->
         <div class="shrink-0 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 hover:border-blue-400 transition-colors shadow-sm overflow-hidden">
           <el-upload class="w-full" drag :http-request="handleUpload" :show-file-list="false" :disabled="isUploading || isProcessing">
@@ -391,7 +412,7 @@ onUnmounted(() => {
       </section>
 
       <!-- Right: Preview Area -->
-      <section class="w-1/3 p-4 bg-gray-100 flex flex-col overflow-hidden">
+      <section class="flex-1 p-4 bg-gray-100 flex flex-col overflow-hidden transition-all duration-300 ease-in-out">
         <div class="flex items-center justify-between mb-3 shrink-0 px-1 gap-2">
           <h2 class="text-base font-bold text-gray-700 uppercase tracking-wide whitespace-nowrap">📄 文本预览</h2>
           <el-select 
@@ -411,7 +432,7 @@ onUnmounted(() => {
           </el-select>
           <span class="text-xs text-blue-600 font-bold px-2 py-1 bg-blue-50 rounded truncate max-w-[80px]" v-if="fileUploaded" :title="fileName">{{ fileName }}</span>
         </div>
-        <div class="flex-1 bg-white border border-gray-200 rounded-xl font-mono text-sm overflow-y-auto text-gray-600 leading-relaxed shadow-inner custom-scrollbar">
+        <div ref="previewScrollContainer" class="flex-1 bg-white border border-gray-200 rounded-xl font-mono text-sm overflow-y-auto text-gray-600 leading-relaxed shadow-inner custom-scrollbar">
           <div v-if="!fileUploaded && !isProcessing" class="h-full flex flex-col items-center justify-center text-gray-400 italic gap-2">
             <el-icon class="text-4xl opacity-20 mb-1"><Document /></el-icon>
             请上传文件以显示预览
