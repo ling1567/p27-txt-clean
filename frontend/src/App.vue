@@ -134,11 +134,23 @@ const handleUpload = async (options: any) => {
     previewLines.value = data.preview
     fileUploaded.value = true
     selectedChapterIndex.value = null
-    detectedChapters.value = []
     
     addLog(`文件 ${data.file_name} 上传成功`)
     addLog(`已将 ${data.encoding} 编码改成 utf-8 编码`)
     if (data.has_bom) addLog('已去除 BOM')
+
+    // 处理自动识别的章节
+    if (data.detected_regex) {
+      chapterConfig.value.regex = data.detected_regex
+      detectedChapters.value = data.auto_chapters
+      manualOptions.value.chapter = false
+      addLog(`✨ 自动识别章节成功：发现 ${data.auto_chapters.length} 个章节`)
+      addLog(`已自动应用正则：${data.detected_regex}`)
+    } else {
+      detectedChapters.value = []
+      addLog('未发现匹配的章节范式，您可以尝试手动推导', 'WARN')
+    }
+    
     addLog('预览区已刷新')
     
   } catch (error: any) {
@@ -179,7 +191,12 @@ const handleProcess = async () => {
     const data = response.data
     previewLines.value = data.preview
     detectedChapters.value = data.chapters
-    selectedChapterIndex.value = null
+    
+    // 如果用户之前选择了具体章节，刷新后尝试保持在该章节
+    if (selectedChapterIndex.value !== null) {
+      await handleChapterChange(selectedChapterIndex.value)
+    }
+    
     data.logs.forEach((msg: string) => addLog(msg))
     addLog('预览区已刷新为处理后的文件')
     ElMessage.success('处理完成')

@@ -4,7 +4,7 @@ import charset_normalizer
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi.responses import FileResponse, StreamingResponse
 import io
 import urllib.parse
@@ -16,7 +16,7 @@ import asyncio
 
 # Internal modules
 from core.cleaner import clean_text_pipeline
-from core.chapter import detect_chapters, deduce_regex, reorder_chapters
+from core.chapter import detect_chapters, deduce_regex, reorder_chapters, auto_detect_chapter_pattern
 
 app = FastAPI(title="27 TXT Formatter API")
 
@@ -41,6 +41,8 @@ class UploadResponse(BaseModel):
     preview: List[str]
     encoding: str
     has_bom: bool
+    auto_chapters: List[Dict[str, Any]] = []
+    detected_regex: Optional[str] = None
 
 class ProcessRequest(BaseModel):
     options: dict
@@ -78,6 +80,13 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="File too large (Max 50MB)")
     text, original_encoding, has_bom = process_initial_txt(content)
     task_id = str(uuid.uuid4())
+    
+    # 自动识别章节
+    auto_regex = auto_detect_chapter_pattern(text)
+    auto_chapters = []
+    if auto_regex:
+        auto_chapters = detect_chapters(text, auto_regex)
+    
     lines = text.splitlines()
     tasks[task_id] = {
         "file_name": file.filename,
@@ -92,7 +101,9 @@ async def upload_file(file: UploadFile = File(...)):
         "file_name": file.filename,
         "preview": lines[:500],
         "encoding": original_encoding,
-        "has_bom": has_bom
+        "has_bom": has_bom,
+        "auto_chapters": auto_chapters,
+        "detected_regex": auto_regex
     }
 
 @app.get("/api/stream-progress/{task_id}")
@@ -126,14 +137,18 @@ async def process_file(task_id: str, request: ProcessRequest):
     
     # 章节处理
     chapters = []
+    chapter_pattern = request.options.get("chapter_pattern")
+    
     if request.options.get("chapter", False):
         update_progress(95) # Artificial progress for chapter detection
-        custom_pattern = request.options.get("chapter_pattern")
-        chapters = detect_chapters(processed_text, custom_pattern)
+        chapters = detect_chapters(processed_text, chapter_pattern)
         if request.options.get("chapter_reorder", False) and chapters:
             processed_text = reorder_chapters(processed_text, chapters)
             logs.append("已完成章节序号物理重排")
-            chapters = detect_chapters(processed_text, custom_pattern)
+            chapters = detect_chapters(processed_text, chapter_pattern)
+    elif chapter_pattern:
+        # 即使没有勾选“手动处理-章节重排”，只要有正则，就返回识别结果供前端预览区导航
+        chapters = detect_chapters(processed_text, chapter_pattern)
     
     task["content"] = processed_text
     update_progress(100)
