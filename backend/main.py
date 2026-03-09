@@ -157,6 +157,37 @@ async def api_preview_chapters(task_id: str, request: dict):
     chapters = detect_chapters(text, request.get("pattern"), request.get("max_length", 35))
     return {"chapters": chapters}
 
+@app.get("/api/chapters/content/{task_id}/{chapter_index}")
+async def get_chapter_content(task_id: str, chapter_index: int):
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task = tasks[task_id]
+    text = task["content"]
+    options = {} # Default options for detection
+    chapters = detect_chapters(text, None) # This uses builtin, ideally we'd pass the current regex
+    # Wait, detect_chapters needs to be consistent. 
+    # Let's assume the frontend provides the pattern if needed, but for now we'll just use the ones we found.
+    # Actually, a better way is to pass the line range from frontend.
+    
+    return {"detail": "Use /api/preview/range instead for more flexibility"}
+
+@app.post("/api/preview/range/{task_id}")
+async def get_preview_range(task_id: str, request: dict):
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    start_line = request.get("start_line", 0)
+    end_line = request.get("end_line", start_line + 500)
+    
+    text = tasks[task_id]["content"]
+    lines = text.splitlines()
+    
+    return {
+        "preview": lines[start_line:end_line],
+        "total_lines": len(lines)
+    }
+
 @app.get("/api/download/{task_id}")
 async def download_file(task_id: str):
     if task_id not in tasks:

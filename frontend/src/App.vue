@@ -26,6 +26,7 @@ const processingProgress = ref(0)
 const isProcessing = ref(false)
 const detectedChapters = ref<any[]>([])
 const isDeducing = ref(false)
+const selectedChapterIndex = ref<number | null>(null)
 
 let sseSource: EventSource | null = null
 
@@ -90,6 +91,28 @@ const handleDeduce = async () => {
   }
 }
 
+const handleChapterChange = async (index: number) => {
+  if (!task_id.value || index === null) return
+  const currentChapter = detectedChapters.value.find(c => c.index === index)
+  if (!currentChapter) return
+  
+  const nextChapter = detectedChapters.value.find(c => c.index === index + 1)
+  
+  const startLine = currentChapter.line_number
+  const endLine = nextChapter ? nextChapter.line_number : undefined
+  
+  try {
+    const response = await axios.post(`${API_BASE}/api/preview/range/${task_id.value}`, {
+      start_line: startLine,
+      end_line: endLine
+    })
+    previewLines.value = response.data.preview
+    addLog(`已跳转至章节: ${currentChapter.title}`)
+  } catch (e) {
+    ElMessage.error('获取章节内容失败')
+  }
+}
+
 // File Lifecycle
 const handleUpload = async (options: any) => {
   const { file } = options
@@ -110,6 +133,8 @@ const handleUpload = async (options: any) => {
     fileName.value = data.file_name
     previewLines.value = data.preview
     fileUploaded.value = true
+    selectedChapterIndex.value = null
+    detectedChapters.value = []
     
     addLog(`文件 ${data.file_name} 上传成功`)
     addLog(`已将 ${data.encoding} 编码改成 utf-8 编码`)
@@ -154,6 +179,7 @@ const handleProcess = async () => {
     const data = response.data
     previewLines.value = data.preview
     detectedChapters.value = data.chapters
+    selectedChapterIndex.value = null
     data.logs.forEach((msg: string) => addLog(msg))
     addLog('预览区已刷新为处理后的文件')
     ElMessage.success('处理完成')
@@ -349,9 +375,24 @@ onUnmounted(() => {
 
       <!-- Right: Preview Area -->
       <section class="w-1/3 p-4 bg-gray-100 flex flex-col overflow-hidden">
-        <div class="flex items-center justify-between mb-3 shrink-0 px-1">
-          <h2 class="text-base font-bold text-gray-700 uppercase tracking-wide">📄 文本预览区 (前500行)</h2>
-          <span class="text-xs text-blue-600 font-bold px-2 py-1 bg-blue-50 rounded" v-if="fileUploaded">{{ fileName }}</span>
+        <div class="flex items-center justify-between mb-3 shrink-0 px-1 gap-2">
+          <h2 class="text-base font-bold text-gray-700 uppercase tracking-wide whitespace-nowrap">📄 文本预览</h2>
+          <el-select 
+            v-model="selectedChapterIndex" 
+            placeholder="按章节读取" 
+            size="small" 
+            class="flex-1"
+            :disabled="detectedChapters.length === 0"
+            @change="handleChapterChange"
+          >
+            <el-option
+              v-for="item in detectedChapters"
+              :key="item.index"
+              :label="item.title"
+              :value="item.index"
+            />
+          </el-select>
+          <span class="text-xs text-blue-600 font-bold px-2 py-1 bg-blue-50 rounded truncate max-w-[80px]" v-if="fileUploaded" :title="fileName">{{ fileName }}</span>
         </div>
         <div class="flex-1 bg-white border border-gray-200 rounded-xl font-mono text-sm overflow-y-auto text-gray-600 leading-relaxed shadow-inner custom-scrollbar">
           <div v-if="!fileUploaded && !isProcessing" class="h-full flex flex-col items-center justify-center text-gray-400 italic gap-2">
